@@ -1,0 +1,181 @@
+# Micrograd (Karpathy Neural Networks Series #1)
+
+```elixir
+Mix.install(
+  [
+    {:axon, "~> 0.5.1"},
+    {:nx, "~> 0.5"},
+    {:vega_lite, "~> 0.1.6"},
+    {:kino_vega_lite, "~> 0.1.7"}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## Derivatives
+
+```elixir
+# https://www.youtube.com/watch?v=VMj-3S1tku0&list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ
+
+f = fn x -> 3 * x * x - 4 * x + 5 end
+f.(3.0) |> IO.inspect()
+
+alias VegaLite, as: Vl
+
+# floating point range (step size < 1)
+defmodule FRange do
+  def new(from, to, step) do
+    Stream.unfold(from, fn
+      x when x > to -> nil
+      x -> {x, x + step}
+    end)
+  end
+end
+
+Vl.new()
+|> Vl.data_from_values(for x <- FRange.new(-5, 5, 0.1), do: %{"x" => x, y: f.(x)})
+|> Vl.mark(:line)
+|> Vl.encode_field(:x, "x", type: :quantitative)
+|> Vl.encode_field(:y, "y", type: :quantitative)
+```
+
+```elixir
+h = 0.000001
+x = 2 / 3
+(f.(x + h) - f.(x)) / h
+```
+
+```elixir
+a = 2.0
+b = -3.0
+c = 10.0
+d = a * b + c
+d |> IO.puts()
+```
+
+```elixir
+h = 0.0001
+
+# inputs
+a = 2.0
+b = -3.0
+c = 10.0
+d1 = a * b + c
+a = a + h
+d2 = a * b + c
+d1 |> IO.puts()
+d2 |> IO.puts()
+((d2 - d1) / h) |> IO.inspect(label: :slope_a)
+
+d1 = a * b + c
+b = b + h
+d2 = a * b + c
+# d1 |> IO.puts()
+# d2 |> IO.puts()
+((d2 - d1) / h) |> IO.inspect(label: :slope_b)
+
+d1 = a * b + c
+c = c + h
+d2 = a * b + c
+# d1 |> IO.puts()
+# d2 |> IO.puts()
+((d2 - d1) / h) |> IO.inspect(label: :slope_c)
+:ok
+```
+
+```elixir
+defmodule Value do
+  @derive {Inspect, only: [:data, :label, :op]}
+  defstruct [:data, :label, :prev, :op, :id, grad: 0]
+
+  def new(data, label, children \\ [], op \\ nil),
+    do: %Value{
+      data: data,
+      label: label,
+      prev: MapSet.new(children),
+      op: op,
+      id: :erlang.unique_integer()
+    }
+
+  def add(%Value{} = a, %Value{} = b), do: new(a.data + b.data, nil, [a, b], "+")
+  def mul(%Value{} = a, %Value{} = b), do: new(a.data * b.data, nil, [a, b], "x")
+  def label(%Value{} = v, label), do: %{v | label: label}
+  def grad(%Value{} = v, grad), do: %{v | grad: grad}
+  def nudge(%Value{} = v, delta \\ 0.01), do: %{v | data: v.data + delta * v.grad}
+end
+
+defmodule Value.Kino do
+  def new(%Value{} = v) do
+    (["graph LR;"] ++ lines(v))
+    |> Enum.join("\n")
+    |> Kino.Mermaid.new()
+  end
+
+  defp lines(%{op: nil}), do: []
+
+  defp lines(v) do
+    [edge(node(:op, v), node(:data, v))] ++
+      Enum.map(Enum.reverse(v.prev), &edge(node(:data, &1), node(:op, v))) ++
+      Enum.flat_map(v.prev, &lines(&1))
+  end
+
+  def edge(a, b), do: "#{a} --> #{b};"
+  def node(:data, v), do: "v_#{v.id}[#{v.label}: data #{v.data}, grad #{v.grad}]"
+  def node(:op, v), do: "v_#{v.id}_op((#{v.op}))"
+end
+
+# 4. dL/da = dL/de * de/da = -2 * b = 6
+a = Value.new(2.0, "a") |> Value.grad(6.0)
+# 4. dL/db = dL/de * de/db = -2 * a = -4
+b = Value.new(-3.0, "b") |> Value.grad(-4.0)
+# 3. dL/dc = dL/dd * dd/dc = -2 * 1 = -2
+c = Value.new(10.0, "c") |> Value.grad(-2.0)
+# 2. dL/df = d = 4
+f = Value.new(-2.0, "f") |> Value.grad(4.0)
+# 3. dL/de = dL/dd * dd/de = -2 * 1 = -2
+e = a |> Value.mul(b) |> Value.label("e") |> Value.grad(-2.0)
+# 2. dL/dd = f = -2
+d = e |> Value.add(c) |> Value.label("d") |> Value.grad(-2.0)
+# 1. dL/dL = 1
+l = d |> Value.mul(f) |> Value.label("L") |> Value.grad(1.0) |> Value.Kino.new()
+```
+
+```elixir
+lol = fn ->
+  h = 0.0001
+
+  a = Value.new(2.0, "a")
+  b = Value.new(-3.0, "b")
+  c = Value.new(10.0, "c")
+  e = a |> Value.mul(b) |> Value.label("e")
+  d = e |> Value.add(c) |> Value.label("d")
+  f = Value.new(-2.0, "f")
+  l = d |> Value.mul(f) |> Value.label("L")
+  l1 = l.data
+
+  a = Value.new(2.0 + h, "a")
+  b = Value.new(-3.0, "b")
+  c = Value.new(10.0, "c")
+  e = a |> Value.mul(b) |> Value.label("e")
+  d = e |> Value.add(c) |> Value.label("d")
+  f = Value.new(-2.0, "f")
+  l = d |> Value.mul(f) |> Value.label("L")
+  l2 = l.data
+
+  (l2 - l1) / h
+end
+
+lol.() |> IO.inspect(label: :grad_a)
+```
+
+```elixir
+a = Value.new(2.0, "a") |> Value.grad(6.0) |> Value.nudge()
+b = Value.new(-3.0, "b") |> Value.grad(-4.0) |> Value.nudge()
+c = Value.new(10.0, "c") |> Value.grad(-2.0) |> Value.nudge()
+f = Value.new(-2.0, "f") |> Value.grad(4.0) |> Value.nudge()
+e = a |> Value.mul(b) |> Value.label("e")
+d = e |> Value.add(c) |> Value.label("d")
+l = d |> Value.mul(f) |> Value.label("L")
+
+IO.puts(l.data)
+```

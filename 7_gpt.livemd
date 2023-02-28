@@ -1,0 +1,122 @@
+# chat-gpt
+
+```elixir
+Mix.install([
+  {:axon, "~> 0.5.1"},
+  {:httpoison, "~> 2.0"},
+  {:nx, "~> 0.5"}
+])
+```
+
+## Fetch & Parse
+
+```elixir
+%{body: text} =
+  "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
+  |> HTTPoison.get!()
+
+text |> String.length()
+chars = text |> String.graphemes() |> MapSet.new() |> Enum.sort()
+vocab_size = chars |> length()
+chars |> Enum.join() |> IO.inspect()
+:ok
+```
+
+## Mapping char <-> int
+
+```elixir
+defmodule Mapping do
+  @stoi chars |> Enum.with_index() |> Map.new()
+  @itos @stoi |> Map.new(fn {c, i} -> {i, c} end)
+
+  def encode(s), do: s |> String.graphemes() |> Enum.map(&@stoi[&1])
+  def decode(l), do: l |> Enum.map(&@itos[&1]) |> Enum.join()
+end
+
+"hii there" |> Mapping.encode() |> IO.inspect()
+"hii there" |> Mapping.encode() |> Mapping.decode() |> IO.inspect()
+```
+
+## Tensor Data
+
+```elixir
+data = text |> Mapping.encode() |> Nx.tensor(type: :s8)
+data |> Nx.size() |> IO.inspect()
+data |> Nx.type() |> IO.inspect()
+:ok
+```
+
+## Train/Validation Sets
+
+```elixir
+n = (0.9 * Nx.size(data)) |> floor()
+train_data = data[0..n]
+val_data = data[(n + 1)..-1//1]
+:ok
+```
+
+## Blocks (time dimension)
+
+```elixir
+block_size = 8
+train_data[0..block_size]
+
+x = train_data[0..(block_size - 1)]
+y = train_data[1..block_size]
+
+for t <- 0..(block_size - 1) do
+  context = x[0..t]
+  target = y[t] |> Nx.to_number()
+  "when input is #{context |> Nx.to_list() |> inspect()} the target: #{target}" |> IO.puts()
+end
+
+:ok
+```
+
+## Batch dimension
+
+```elixir
+batch_size = 4
+
+get_batch = fn data ->
+  ix = for _ <- 1..batch_size, do: :rand.uniform(Nx.size(data) - block_size) - 1
+  x = Nx.stack(for i <- ix, do: data[i..(i + block_size - 1)])
+  y = Nx.stack(for i <- ix, do: data[(i + 1)..(i + block_size)])
+  {x, y}
+end
+
+{xb, yb} = get_batch.(train_data)
+"inputs:" |> IO.puts()
+xb |> Nx.shape() |> IO.inspect()
+xb |> IO.inspect()
+"targets:" |> IO.puts()
+yb |> Nx.shape() |> IO.inspect()
+yb |> IO.inspect()
+
+for b <- 0..(batch_size - 1), t <- 0..(block_size - 1) do
+  context = xb[b][0..t]
+  target = yb[b][t] |> Nx.to_number()
+
+  "when input is #{context |> Nx.to_list() |> inspect(charlists: :as_lists)} the target: #{target}"
+  |> IO.puts()
+end
+
+:ok
+```
+
+## Neural Network
+
+```elixir
+defmodule BigramLanguageModel do
+  def new(vocab_size) do
+    Axon.input("input")
+    |> Axon.embedding(vocab_size, vocab_size)
+    |> Axon.build()
+  end
+end
+
+{init_fn, predict_fn} = BigramLanguageModel.new(vocab_size)
+template = Nx.template({4, 8}, :s8)
+params = init_fn.(template, %{})
+predict_fn.(params, xb)
+```
