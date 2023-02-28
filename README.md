@@ -1,6 +1,6 @@
 # Neural Networks: Zero to Hero (Elixir)
 
-Elixir code for Andrej Karpathy's [https://www.youtube.com/playlist?list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ](Neural Networks: Zero to Hero) lecture playlist.
+Elixir code for Andrej Karpathy's [Neural Networks: Zero to Hero](https://www.youtube.com/playlist?list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ) lecture playlist.
 
 Translated from python/jupyter to more or less idiomatatic elixir/livebook.
 
