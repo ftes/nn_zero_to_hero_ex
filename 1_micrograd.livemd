@@ -1,4 +1,4 @@
-# Micrograd (Karpathy Neural Networks Series #1)
+# Micrograd (Karpathy Neural Networks Series #1) - fork
 
 ```elixir
 Mix.install(
@@ -37,6 +37,9 @@ Vl.new()
 |> Vl.mark(:line)
 |> Vl.encode_field(:x, "x", type: :quantitative)
 |> Vl.encode_field(:y, "y", type: :quantitative)
+|> Kino.render()
+
+:ok
 ```
 
 ```elixir
@@ -85,7 +88,14 @@ d2 = a * b + c
 
 ```elixir
 defmodule Value do
-  import Kernel, except: [div: 2]
+  import Kernel, except: [+: 2, -: 2, /: 2, *: 2, **: 2]
+
+  defmacro __using__(_) do
+    quote do
+      import Kernel, except: [+: 2, -: 2, /: 2, *: 2, **: 2]
+      import Value
+    end
+  end
 
   @derive {Inspect, only: [:data]}
   defstruct [:data, :label, :id, prev: [], op: nil, grad: 0.0]
@@ -94,39 +104,43 @@ defmodule Value do
   def new(data, label), do: %Value{data: data, label: label} |> new()
   def new(%Value{} = v), do: %{v | id: :erlang.unique_integer()}
 
-  def add([%Value{} = v | vs]),
-    do: Enum.reduce(vs, v, fn v, acc -> add(v, acc) |> Value.label("+") end)
+  def sum([%Value{} = v | vs]),
+    do: Enum.reduce(vs, v, fn v, acc -> (v + acc) |> Value.label("+") end)
 
-  def add(%Value{} = a, b) when is_number(b), do: add(a, new(b, "#{b}"))
-  def add(a, %Value{} = b) when is_number(a), do: add(new(a, "#{a}"), b)
+  def (%Value{} = a) + b when is_number(b), do: a + new(b, "#{b}")
+  def a + (%Value{} = b) when is_number(a), do: new(a, "#{a}") + b
 
-  def add(%Value{} = a, %Value{} = b) do
+  def (%Value{} = a) + (%Value{} = b) do
     %Value{
       data: a.data + b.data,
-      label: "#{a.label}+#{b.label}",
+      label: "+",
       prev: [a, b],
       op: :+
     }
     |> new()
   end
 
-  def mul(%Value{} = a, b) when is_number(b), do: mul(a, new(b, "#{b}"))
-  def mul(a, %Value{} = b) when is_number(a), do: mul(new(a, "#{a}"), b)
+  def a + b, do: Kernel.+(a, b)
 
-  def mul(%Value{} = a, %Value{} = b) do
+  def (%Value{} = a) * b when is_number(b), do: a * new(b, "#{b}")
+  def a * (%Value{} = b) when is_number(a), do: new(a, "#{a}") * b
+
+  def (%Value{} = a) * (%Value{} = b) do
     %Value{
       data: a.data * b.data,
-      label: "#{a.label}*#{b.label}",
+      label: "x",
       prev: [a, b],
       op: :x
     }
     |> new()
   end
 
+  def a * b, do: Kernel.*(a, b)
+
   def tanh(%Value{} = v) do
     %Value{
       data: (:math.exp(2 * v.data) - 1) / (:math.exp(2 * v.data) + 1),
-      label: "tanh #{v.label}",
+      label: "tanh",
       prev: [v],
       op: :tanh
     }
@@ -138,32 +152,35 @@ defmodule Value do
   def exp(%Value{} = v) do
     %Value{
       data: :math.exp(v.data),
-      label: "exp #{v.label}",
+      label: "exp",
       prev: [v],
       op: :exp
     }
     |> new()
   end
 
-  def pow(%Value{} = a, b) when is_number(b) do
+  def (%Value{} = a) ** b when is_number(b) do
     %Value{
-      data: :math.pow(a.data, b),
-      label: "#{a.label}**#{b}",
+      data: a.data ** b,
+      label: "**",
       prev: [a, new(b, "#{b}")],
       op: :pow
     }
     |> new()
   end
 
-  def div(%Value{} = a, b) when is_number(b), do: div(a, new(b, "#{b}"))
-  def div(a, %Value{} = b) when is_number(a), do: div(new(a, "#{a}"), b)
+  def a ** b, do: Kernel.**(a, b)
 
-  def div(%Value{} = a, %Value{} = b), do: a |> mul(b |> pow(-1.0))
+  def (%Value{} = a) / b when is_number(b), do: a / new(b, "#{b}")
+  def a / (%Value{} = b) when is_number(a), do: new(a, "#{a}") / b
+  def (%Value{} = a) / (%Value{} = b), do: (a * b ** -1.0) |> label("div")
+  def a / b, do: Kernel./(a, b)
 
-  def neg(%Value{} = v), do: v |> mul(-1.0)
+  def neg(%Value{} = v), do: (v * -1.0) |> label("neg")
 
-  def sub(%Value{} = a, b) when is_number(b), do: sub(a, new(b, "#{b}"))
-  def sub(%Value{} = a, %Value{} = b), do: a |> add(b |> neg())
+  def (%Value{} = a) - b when is_number(b), do: a - new(b, "#{b}")
+  def (%Value{} = a) - (%Value{} = b), do: (a + neg(b)) |> label("-")
+  def a - b, do: Kernel.-(a, b)
 
   def label(%Value{} = v, label), do: %{v | label: label}
   def grad(%Value{} = v, grad), do: %{v | grad: grad}
@@ -172,7 +189,7 @@ end
 
 defmodule Value.Kino do
   def new(%Value{} = v) do
-    (["graph LR;"] ++ lines(v))
+    (["graph TB;"] ++ lines(v))
     |> Enum.join("\n")
     |> Kino.Mermaid.new()
   end
@@ -188,12 +205,16 @@ defmodule Value.Kino do
   def edge(a, b), do: "#{a} --> #{b};"
 
   def node(:data, v),
-    do: "v_#{v.id}[#{v.label}: data #{Float.round(v.data, 4)}, grad #{Float.round(v.grad, 4)}]"
+    do: "v_#{v.id}[#{v.label}: data #{Float.round(v.data, 2)}, grad #{Float.round(v.grad, 2)}]"
 
   def node(:op, v), do: "v_#{v.id}_op((#{v.op}))"
 end
 
 alias Value, as: V
+```
+
+```elixir
+use Value
 
 # 4. dL/da = dL/de * de/da = -2 * b = 6
 a = V.new(2.0, "a") |> V.grad(6.0)
@@ -204,11 +225,11 @@ c = V.new(10.0, "c") |> V.grad(-2.0)
 # 2. dL/df = d = 4
 f = V.new(-2.0, "f") |> V.grad(4.0)
 # 3. dL/de = dL/dd * dd/de = -2 * 1 = -2
-e = a |> V.mul(b) |> V.label("e") |> V.grad(-2.0)
+e = (a * b) |> V.label("e") |> V.grad(-2.0)
 # 2. dL/dd = f = -2
-d = e |> V.add(c) |> V.label("d") |> V.grad(-2.0)
+d = (e + c) |> V.label("d") |> V.grad(-2.0)
 # 1. dL/dL = 1
-l = d |> V.mul(f) |> V.label("L") |> V.grad(1.0) |> V.Kino.new()
+l = (d * f) |> V.label("L") |> V.grad(1.0) |> V.Kino.new()
 ```
 
 ```elixir
@@ -218,19 +239,19 @@ lol = fn ->
   a = V.new(2.0, "a")
   b = V.new(-3.0, "b")
   c = V.new(10.0, "c")
-  e = a |> V.mul(b) |> V.label("e")
-  d = e |> V.add(c) |> V.label("d")
+  e = (a * b) |> V.label("e")
+  d = (e * c) |> V.label("d")
   f = V.new(-2.0, "f")
-  l = d |> V.mul(f) |> V.label("L")
+  l = (d * f) |> V.label("L")
   l1 = l.data
 
   a = V.new(2.0 + h, "a")
   b = V.new(-3.0, "b")
   c = V.new(10.0, "c")
-  e = a |> V.mul(b) |> V.label("e")
-  d = e |> V.add(c) |> V.label("d")
+  e = (a * b) |> V.label("e")
+  d = (e + c) |> V.label("d")
   f = V.new(-2.0, "f")
-  l = d |> V.mul(f) |> V.label("L")
+  l = (d * f) |> V.label("L")
   l2 = l.data
 
   (l2 - l1) / h
@@ -244,9 +265,9 @@ a = V.new(2.0, "a") |> V.grad(6.0) |> V.nudge()
 b = V.new(-3.0, "b") |> V.grad(-4.0) |> V.nudge()
 c = V.new(10.0, "c") |> V.grad(-2.0) |> V.nudge()
 f = V.new(-2.0, "f") |> V.grad(4.0) |> V.nudge()
-e = a |> V.mul(b) |> V.label("e")
-d = e |> V.add(c) |> V.label("d")
-l = d |> V.mul(f) |> V.label("L")
+e = (a * b) |> V.label("e")
+d = (e + c) |> V.label("d")
+l = (d * f) |> V.label("L")
 
 IO.puts(l.data)
 ```
@@ -275,20 +296,20 @@ w2 = V.new(1.0, "w2") |> V.grad(0.0)
 b = V.new(6.8813735870195432, "b") |> V.grad(0.5)
 
 # 4. do/x1w1 after '+', just copy x1*w1....grad
-x1w1 = x1 |> V.mul(w1) |> V.grad(0.5)
+x1w1 = (x1 * w1) |> V.grad(0.5)
 # 4. do/x1w1 after '+', just copy x1*w1....grad
-x2w2 = x2 |> V.mul(w2) |> V.grad(0.5)
+x2w2 = (x2 * w2) |> V.grad(0.5)
 # 3. do/dx1*... after '+', just copy n.grad
-x1w1x2w2 = x1w1 |> V.add(x2w2) |> V.grad(0.5)
+x1w1x2w2 = (x1w1 + x2w2) |> V.grad(0.5)
 # 4. do/dn = 1-tanh(o)^2 = 1-0.7^2 = 0.5
-n = x1w1x2w2 |> V.add(b) |> V.label("n") |> V.grad(0.5)
+n = (x1w1x2w2 + b) |> V.label("n") |> V.grad(0.5)
 # 5. do/do = 1
 o = n |> V.tanh() |> V.label("o") |> V.grad(1.0)
 o |> V.Kino.new()
 ```
 
 ```elixir
-defmodule Backpropagation do
+defmodule BackpropagationWithBug do
   alias Value, as: V
 
   def backward(%V{} = v), do: b(%{v | grad: 1.0})
@@ -315,14 +336,14 @@ defmodule Backpropagation do
 
   defp b(%V{op: :tanh} = v) do
     [c] = v.prev
-    c = %{c | grad: c.grad + 1.0 - :math.pow(v.data, 2) * v.grad}
+    c = %{c | grad: c.grad + (1.0 - v.data ** 2) * v.grad}
     %{v | prev: [c] |> b()}
   end
 
   defp b(%V{op: nil} = v), do: v
 end
 
-alias Backpropagation, as: B
+alias BackpropagationWithBug, as: B
 
 # inputs
 x1 = V.new(2.0, "x1")
@@ -333,10 +354,10 @@ w2 = V.new(1.0, "w2")
 # bias
 b = V.new(6.8813735870195432, "b")
 
-x1w1 = x1 |> V.mul(w1)
-x2w2 = x2 |> V.mul(w2)
-x1w1x2w2 = x1w1 |> V.add(x2w2)
-n = x1w1x2w2 |> V.add(b) |> V.label("n")
+x1w1 = x1 * w1
+x2w2 = x2 * w2
+x1w1x2w2 = x1w1 + x2w2
+n = (x1w1x2w2 + b) |> V.label("n")
 o = n |> V.tanh() |> V.label("o")
 
 o = o |> B.backward() |> V.Kino.new()
@@ -345,15 +366,15 @@ o = o |> B.backward() |> V.Kino.new()
 ```elixir
 # Bug symptom 1: a should have gradient 2 (a+a = 2*a)
 a = V.new(3.0, "a")
-b = a |> V.add(a) |> V.label("b")
+b = (a + a) |> V.label("b")
 b |> B.backward() |> V.Kino.new() |> Kino.render()
 
 # Bug symptom 2: using variable more than once
 a = V.new(-2.0, "a")
 b = V.new(3.0, "b")
-d = a |> V.mul(b) |> V.label("d")
-e = a |> V.add(b) |> V.label("e")
-f = d |> V.mul(e) |> V.label("f")
+d = (a * b) |> V.label("d")
+e = (a + b) |> V.label("e")
+f = (d * e) |> V.label("f")
 
 f |> B.backward() |> V.Kino.new() |> Kino.render()
 
@@ -361,72 +382,55 @@ f |> B.backward() |> V.Kino.new() |> Kino.render()
 ```
 
 ```elixir
-defmodule BackpropagationWithoutBug do
+defmodule Backpropagation do
   alias Value, as: V
 
   def backward(%V{} = v) do
-    b([v], %{}, %{v.id => 1.0})
+    v
+    |> grads()
     |> put_grads(v)
   end
 
-  defp b(nodes, visited, grads)
-
-  defp b([], _, grads), do: grads
-
-  defp b([%V{id: id} | rest], visited, grads) when is_map_key(visited, id) do
-    b(rest, visited, grads)
+  def grads(%V{} = v) do
+    v
+    |> topo()
+    |> Enum.reverse()
+    |> b(%{v.id => 1.0})
   end
 
-  defp b([%V{op: nil, id: id} | rest], visited, grads) do
-    b(rest, Map.put(visited, id, true), grads)
+  defp topo(v), do: topo(v, %{}) |> elem(0)
+  defp topo(%{id: id}, visited) when is_map_key(visited, id), do: {[], visited}
+
+  defp topo(v, visited) do
+    visited = Map.put(visited, v.id, true)
+    {prev, visited} = Enum.flat_map_reduce(v.prev, visited, &topo/2)
+    {prev ++ [v], visited}
   end
 
-  defp b([%V{op: :+} = v | rest], visited, grads) do
-    [c1, c2] = v.prev
+  defp b(nodes, grads)
+  defp b([], grads), do: grads
+  defp b([%V{op: nil} | rest], grads), do: b(rest, grads)
+
+  defp b([%V{} = v | rest], grads) do
+    c1 = Enum.at(v.prev, 0)
+    c2 = Enum.at(v.prev, 1)
+    grad = grads[v.id]
+
+    new_grads =
+      case v.op do
+        :+ -> [{c1.id, grad}, {c2.id, grad}]
+        :x -> [{c1.id, c2.data * grad}, {c2.id, c1.data * grad}]
+        :tanh -> [{c1.id, (1 - v.data ** 2) * grad}]
+        :exp -> [{c1.id, v.data * grad}]
+        :pow -> [{c1.id, c2.data * c1.data ** (c2.data - 1) * grad}]
+      end
 
     grads =
-      grads
-      |> Map.update(c1.id, grads[v.id], &(&1 + grads[v.id]))
-      |> Map.update(c2.id, grads[v.id], &(&1 + grads[v.id]))
+      Enum.reduce(new_grads, grads, fn {id, grad}, acc ->
+        Map.update(acc, id, grad, &(&1 + grad))
+      end)
 
-    b(rest ++ v.prev, Map.put(visited, v.id, true), grads)
-  end
-
-  defp b([%V{op: :x} = v | rest], visited, grads) do
-    [c1, c2] = v.prev
-    grad_c1 = c2.data * grads[v.id]
-    grad_c2 = c1.data * grads[v.id]
-
-    grads =
-      grads
-      |> Map.update(c1.id, grad_c1, &(&1 + grad_c1))
-      |> Map.update(c2.id, grad_c2, &(&1 + grad_c2))
-
-    b(rest ++ v.prev, Map.put(visited, v.id, true), grads)
-  end
-
-  defp b([%V{op: :tanh} = v | rest], visited, grads) do
-    [c] = v.prev
-    grad = 1 - :math.pow(v.data, 2) * grads[v.id]
-    grads = Map.update(grads, c.id, grad, &(&1 + grad))
-
-    b(rest ++ v.prev, Map.put(visited, v.id, true), grads)
-  end
-
-  defp b([%V{op: :exp} = v | rest], visited, grads) do
-    [c] = v.prev
-    grad = :math.exp(v.data) * grads[v.id]
-    grads = Map.update(grads, c.id, grad, &(&1 + grad))
-
-    b(rest ++ v.prev, Map.put(visited, v.id, true), grads)
-  end
-
-  defp b([%V{op: :pow} = v | rest], visited, grads) do
-    [c1, c2] = v.prev
-    grad_c1 = c2.data * :math.pow(c1.data, c2.data - 1.0) * grads[v.id]
-    grads = Map.update(grads, c1.id, grad_c1, &(&1 + grad_c1))
-
-    b(rest ++ v.prev, Map.put(visited, v.id, true), grads)
+    b(rest, grads)
   end
 
   defp put_grads(grads, v) do
@@ -434,25 +438,25 @@ defmodule BackpropagationWithoutBug do
   end
 end
 
-alias BackpropagationWithoutBug, as: B
+alias Backpropagation, as: B
 
 # Bug symptom 1: a should have gradient 2 (a+a = 2*a)
 a = V.new(3.0, "a")
-b = a |> V.add(a) |> V.label("b")
+b = (a + a) |> V.label("b")
 b |> B.backward() |> V.Kino.new() |> Kino.render()
 
 # Bug symptom 2: using variable more than once
 a = V.new(-2.0, "a")
 b = V.new(3.0, "b")
-d = a |> V.mul(b) |> V.label("d")
-e = a |> V.add(b) |> V.label("e")
-f = d |> V.mul(e) |> V.label("f")
+d = (a * b) |> V.label("d")
+e = (a + b) |> V.label("e")
+f = (d * e) |> V.label("f")
 
 f |> B.backward() |> V.Kino.new() |> Kino.render()
 
 a = V.new(2.0, "a")
 b = V.new(4.0, "b")
-a |> V.div(b) |> V.Kino.new() |> Kino.render()
+(a / b) |> B.backward() |> V.Kino.new() |> Kino.render()
 
 :ok
 ```
@@ -467,19 +471,19 @@ w2 = V.new(1.0, "w2")
 # bias
 b = V.new(6.8813735870195432, "b")
 
-x1w1 = x1 |> V.mul(w1)
-x2w2 = x2 |> V.mul(w2)
-x1w1x2w2 = x1w1 |> V.add(x2w2)
-n = x1w1x2w2 |> V.add(b) |> V.label("n")
-e = V.exp(n |> V.mul(2.0))
-o = V.sub(e, 1.0) |> V.div(V.add(e, 1.0)) |> V.label("o")
+x1w1 = x1 * w1
+x2w2 = x2 * w2
+x1w1x2w2 = x1w1 + x2w2
+n = (x1w1x2w2 + b) |> V.label("n")
+e = V.exp(2.0 * n)
+o = ((e - 1.0) / (e + 1.0)) |> V.label("o")
 
-# TODO Fix: Wrong input gradients calculated
-o = o |> B.backward() |> V.Kino.new()
+o |> B.backward() |> V.Kino.new()
 ```
 
 ```elixir
 defmodule BackpropagationWithNx do
+  import Value, except: [+: 2, *: 2]
   import Nx.Defn
 
   @data %{x1: 2.0, w1: -3.0, x2: 0.0, w2: 1.0, b: 6.8813735870195432}
@@ -501,24 +505,38 @@ BNx.x1_grad(2.0) |> Nx.to_number() |> IO.inspect(label: :x1)
 BNx.w1_grad(-3.0) |> Nx.to_number() |> IO.inspect(label: :w1)
 BNx.x2_grad(0.0) |> Nx.to_number() |> IO.inspect(label: :x2)
 BNx.w2_grad(1.0) |> Nx.to_number() |> IO.inspect(label: :w2)
+
+:ok
 ```
 
 ```elixir
 defmodule Neuron do
+  alias Value, as: V
+
   defstruct [:w, :b]
 
   def new(nin) do
     %Neuron{
-      w: for(i <- 1..nin, do: Value.new(rand(-1, 1), "w#{i}")),
-      b: Value.new(rand(-1, 1), "b")
+      w: for(i <- 1..nin, do: V.new(rand(-1, 1), "w#{i}")),
+      b: V.new(rand(-1, 1), "b")
     }
   end
 
   def call(%Neuron{} = n, x) do
     Enum.zip(n.w, x)
-    |> Enum.reduce(n.b, fn {w, x}, acc ->
-      Value.mul(w, x) |> Value.label("*") |> Value.add(acc) |> Value.label("+")
-    end)
+    |> Enum.map(fn {w, x} -> (x * w) |> V.label("*") end)
+    |> V.sum()
+    |> V.+(n.b)
+  end
+
+  def parameters(%Neuron{} = n), do: n.w ++ [n.b]
+
+  def get_grad(%Neuron{} = n, [:w, wi], grads) do
+    grads[Enum.at(n.w, wi).id]
+  end
+
+  def get_grad(%Neuron{} = n, [:b], grads) do
+    grads[n.b.id]
   end
 
   defp rand(from, to), do: :rand.uniform_real() * (to - from) + from
@@ -535,6 +553,14 @@ defmodule Layer do
 
   def call(%Layer{} = l, x) do
     for n <- l.n, do: Neuron.call(n, x)
+  end
+
+  def parameters(%Layer{} = l) do
+    Enum.flat_map(l.n, &Neuron.parameters/1)
+  end
+
+  def get_grad(%Layer{} = l, [ni | path], grads) do
+    Neuron.get_grad(Enum.at(l.n, ni), path, grads)
   end
 end
 
@@ -553,6 +579,14 @@ defmodule MLP do
     m.l
     |> Enum.reduce(x, fn l, x -> Layer.call(l, x) end)
     |> unwrap()
+  end
+
+  def parameters(%MLP{} = m) do
+    Enum.flat_map(m.l, &Layer.parameters/1)
+  end
+
+  def get_grad(%MLP{} = m, [li | path], grads) do
+    Layer.get_grad(Enum.at(m.l, li), path, grads)
   end
 
   defp unwrap([v]), do: v
@@ -578,6 +612,11 @@ xs = [
 
 ys = [1.0, -1.0, -1.0, 1.0]
 ypred = for x <- xs, do: MLP.call(n, x)
-loss = for({ygt, yout} <- Enum.zip(ys, ypred), do: yout |> V.sub(ygt) |> V.pow(2.0)) |> V.add()
-loss |> B.backward()
+loss = for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0) |> V.sum()
+loss = loss |> B.backward() |> IO.inspect(label: :loss)
+# Graph too large to render
+MLP.get_grad(n, [0, 0, :w, 0], loss |> B.grads()) |> IO.inspect(label: :w0_grad)
+MLP.parameters(n) |> length()
+
+# :ok
 ```
