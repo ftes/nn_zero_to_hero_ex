@@ -6,7 +6,7 @@ Translated from python/jupyter to more or less idiomatatic elixir/livebook.
 
 Number | Title | Status
 -------|-------|-------
-1 | micrograd  | 🚧 in progress
+1 | micrograd  | ✅ finished 
 2 | makemore 1 | ❌ not started
 3 | makemore 2 | ❌ not started
 4 | makemore 3 | ❌ not started
