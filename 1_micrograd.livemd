@@ -557,8 +557,10 @@ defmodule Neuron do
   defp rand(from, to), do: :rand.uniform_real() * (to - from) + from
 end
 
-Neuron.new(3) |> Neuron.call([1.0, 2.0, 3.0]) |> V.Kino.new() |> Kino.render()
+Neuron.new(3) |> Neuron.call([1.0, 2.0, 3.0]) |> V.Kino.new()
+```
 
+```elixir
 defmodule Layer do
   defstruct [:n]
 
@@ -577,7 +579,9 @@ end
 
 Layer.new(3, 2)
 |> Layer.call([1.0, 2.0, 3.0])
+```
 
+```elixir
 defmodule MLP do
   defstruct [:l]
 
@@ -707,6 +711,6 @@ xs = [
 
 ys = [1.0, -1.0, -1.0, 1.0]
 n = MLP.new(3, [4, 4, 1])
-n = GradientDescent.run(n, xs, ys, 100, -0.01)
+n = GradientDescent.run(n, xs, ys, 1000, -0.001)
 for x <- xs, do: MLP.call(n, x)
 ```
