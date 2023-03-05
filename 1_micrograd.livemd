@@ -87,149 +87,133 @@ d2 = a * b + c
 ```
 
 ```elixir
+defmodule Gradients do
+  defstruct values: %{}
+
+  def new(values), do: %Gradients{values: values}
+end
+
 defmodule Value do
-  import Kernel, except: [+: 2, -: 2, /: 2, *: 2, **: 2]
-
-  defmacro __using__(_) do
-    quote do
-      import Kernel, except: [+: 2, -: 2, /: 2, *: 2, **: 2]
-      import Value
-    end
-  end
-
   @derive {Inspect, only: [:data]}
-  defstruct [:data, :label, :id, prev: [], op: nil, grad: 0.0]
+  defstruct [:data, :id, :op, :label, prev: []]
 
-  def new(data, label)
-  def new(data, label), do: %Value{data: data, label: label} |> new()
-  def new(%Value{} = v), do: %{v | id: :erlang.unique_integer()}
+  import Kernel, except: [+: 2, -: 2, /: 2, *: 2, **: 2]
+  alias __MODULE__, as: V
 
-  def sum([%Value{} = v | vs]),
-    do: Enum.reduce(vs, v, fn v, acc -> (v + acc) |> Value.label("+") end)
+  def new(data, attrs \\ [])
+  def new(data, label) when is_binary(label), do: new(data, label: label)
 
-  def (%Value{} = a) + b when is_number(b), do: a + new(b, "#{b}")
-  def a + (%Value{} = b) when is_number(a), do: new(a, "#{a}") + b
+  def new(data, attrs) when is_number(data) and is_list(attrs),
+    do: %V{data: data + 0.0, id: System.unique_integer()} |> Map.merge(Map.new(attrs))
 
-  def (%Value{} = a) + (%Value{} = b) do
-    %Value{
-      data: a.data + b.data,
-      label: "+",
-      prev: [a, b],
-      op: :+
-    }
-    |> new()
-  end
+  def sum([%V{} = v | vs]), do: Enum.reduce(vs, v, &(&1 + &2))
 
+  def (%V{} = a) + b when is_number(b), do: a + new(b)
+  def a + (%V{} = b) when is_number(a), do: new(a) + b
+  def (%V{} = a) + (%V{} = b), do: new(a.data + b.data, op: :+, prev: [a, b])
   def a + b, do: Kernel.+(a, b)
 
-  def (%Value{} = a) * b when is_number(b), do: a * new(b, "#{b}")
-  def a * (%Value{} = b) when is_number(a), do: new(a, "#{a}") * b
-
-  def (%Value{} = a) * (%Value{} = b) do
-    %Value{
-      data: a.data * b.data,
-      label: "x",
-      prev: [a, b],
-      op: :x
-    }
-    |> new()
-  end
-
+  def (%V{} = a) * b when is_number(b), do: a * new(b)
+  def a * (%V{} = b) when is_number(a), do: new(a) * b
+  def (%V{} = a) * (%V{} = b), do: new(a.data * b.data, op: :*, prev: [a, b])
   def a * b, do: Kernel.*(a, b)
 
-  def tanh(%Value{} = v) do
-    %Value{
-      data: (:math.exp(2 * v.data) - 1) / (:math.exp(2 * v.data) + 1),
-      label: "tanh",
-      prev: [v],
-      op: :tanh
-    }
-    |> new()
-  end
+  def tanh(a) when is_number(a), do: a |> new() |> tanh()
+  def tanh(%V{} = a), do: new(:math.tanh(a.data), op: :tanh, prev: [a])
 
-  def exp(v) when is_number(v), do: exp(new(v, "#{v}"))
+  def exp(a) when is_number(a), do: a |> new() |> exp()
+  def exp(%V{} = a), do: new(:math.exp(a.data), op: :exp, prev: [a])
 
-  def exp(%Value{} = v) do
-    %Value{
-      data: :math.exp(v.data),
-      label: "exp",
-      prev: [v],
-      op: :exp
-    }
-    |> new()
-  end
-
-  def (%Value{} = a) ** b when is_number(b) do
-    %Value{
-      data: a.data ** b,
-      label: "**",
-      prev: [a, new(b, "#{b}")],
-      op: :pow
-    }
-    |> new()
-  end
-
+  def (%V{} = a) ** b when is_number(b), do: new(a.data ** b, op: :pow, prev: [a, new(b)])
   def a ** b, do: Kernel.**(a, b)
 
-  def (%Value{} = a) / b when is_number(b), do: a / new(b, "#{b}")
-  def a / (%Value{} = b) when is_number(a), do: new(a, "#{a}") / b
-  def (%Value{} = a) / (%Value{} = b), do: (a * b ** -1.0) |> label("div")
+  def (%V{} = a) / b when is_number(b), do: a / new(b)
+  def a / (%V{} = b) when is_number(a), do: new(a) / b
+  def (%V{} = a) / (%V{} = b), do: a * b ** -1.0
   def a / b, do: Kernel./(a, b)
 
-  def neg(%Value{} = v), do: (v * -1.0) |> label("neg")
+  def neg(%V{} = v), do: v * -1.0
 
-  def (%Value{} = a) - b when is_number(b), do: a - new(b, "#{b}")
-  def (%Value{} = a) - (%Value{} = b), do: (a + neg(b)) |> label("-")
+  def a - (%V{} = b) when is_number(a), do: new(a) - b
+  def (%V{} = a) - b when is_number(b), do: a - new(b)
+  def (%V{} = a) - (%V{} = b), do: a + neg(b)
   def a - b, do: Kernel.-(a, b)
 
-  def label(%Value{} = v, label), do: %{v | label: label}
-  def grad(%Value{} = v, grad), do: %{v | grad: grad}
-  def nudge(%Value{} = v, delta \\ 0.01), do: %{v | data: v.data + delta * v.grad}
+  def label(%V{} = v, label), do: %{v | label: label}
+
+  def nudge(%V{} = v, %Gradients{} = g, factor \\ 0.01) do
+    delta = g.values[v.id] * factor
+    Map.update!(v, :data, &(&1 + delta))
+  end
 end
 
 defmodule Value.Kino do
-  def new(%Value{} = v) do
-    (["graph TB;"] ++ lines(v))
+  alias Value, as: V
+  alias Gradients, as: G
+
+  def new(%V{} = v, %G{} = g \\ %G{}) do
+    (["graph TB;"] ++ lines(v, g))
     |> Enum.join("\n")
     |> Kino.Mermaid.new()
   end
 
-  defp lines(%{op: nil}), do: []
+  defp lines(%{op: nil}, _), do: []
 
-  defp lines(v) do
-    [edge(node(:op, v), node(:data, v))] ++
-      Enum.map(v.prev, &edge(node(:data, &1), node(:op, v))) ++
-      Enum.flat_map(v.prev, &lines(&1))
+  defp lines(%V{} = v, %G{} = g) do
+    [node(v, g)] ++
+      Enum.map(v.prev, &edge(node(&1, g), node(v, g))) ++
+      Enum.flat_map(v.prev, &lines(&1, g))
   end
 
-  def edge(a, b), do: "#{a} --> #{b};"
+  defp edge(a, b), do: "#{a} --> #{b};"
 
-  def node(:data, v),
-    do: "v_#{v.id}[#{v.label}: data #{Float.round(v.data, 2)}, grad #{Float.round(v.grad, 2)}]"
+  defp node(%V{} = v, %G{} = g) do
+    values =
+      [v.label, v.op, Float.round(v.data, 2), gradient(g.values[v.id])]
+      |> Enum.reject(&(&1 == nil))
+      |> Enum.join(" ")
 
-  def node(:op, v), do: "v_#{v.id}_op((#{v.op}))"
+    "v_#{v.id}[#{values}]"
+  end
+
+  defp gradient(nil), do: nil
+  defp gradient(g), do: " g #{Float.round(g, 2)}"
 end
-
-alias Value, as: V
 ```
 
 ```elixir
-use Value
+import Kernel, except: [+: 2, -: 2, *: 2, /: 2, **: 2]
+import Value
+alias Value, as: V
+alias Gradients, as: G
 
-# 4. dL/da = dL/de * de/da = -2 * b = 6
-a = V.new(2.0, "a") |> V.grad(6.0)
-# 4. dL/db = dL/de * de/db = -2 * a = -4
-b = V.new(-3.0, "b") |> V.grad(-4.0)
-# 3. dL/dc = dL/dd * dd/dc = -2 * 1 = -2
-c = V.new(10.0, "c") |> V.grad(-2.0)
-# 2. dL/df = d = 4
-f = V.new(-2.0, "f") |> V.grad(4.0)
-# 3. dL/de = dL/dd * dd/de = -2 * 1 = -2
-e = (a * b) |> V.label("e") |> V.grad(-2.0)
-# 2. dL/dd = f = -2
-d = (e + c) |> V.label("d") |> V.grad(-2.0)
-# 1. dL/dL = 1
-l = (d * f) |> V.label("L") |> V.grad(1.0) |> V.Kino.new()
+a = V.new(2.0, "a")
+b = V.new(-3.0, "b")
+c = V.new(10.0, "c")
+f = V.new(-2.0, "f")
+e = (a * b) |> V.label("e")
+d = (e + c) |> V.label("d")
+l = (d * f) |> V.label("L")
+
+g =
+  G.new(%{
+    # 1. dL/dL = 1
+    l.id => 1.0,
+    # 2. dL/dd = f = -2
+    d.id => -2.0,
+    # 2. dL/df = d = 4
+    f.id => 4.0,
+    # 3. dL/de = dL/dd * dd/de = -2 * 1 = -2
+    e.id => -2.0,
+    # 3. dL/dc = dL/dd * dd/dc = -2 * 1 = -2
+    c.id => -2.0,
+    # 4. dL/da = dL/de * de/da = -2 * b = 6
+    a.id => 6.0,
+    # 4. dL/db = dL/de * de/db = -2 * a = -4
+    b.id => -4.0
+  })
+
+V.Kino.new(l, g)
 ```
 
 ```elixir
@@ -261,10 +245,24 @@ lol.() |> IO.inspect(label: :grad_a)
 ```
 
 ```elixir
-a = V.new(2.0, "a") |> V.grad(6.0) |> V.nudge()
-b = V.new(-3.0, "b") |> V.grad(-4.0) |> V.nudge()
-c = V.new(10.0, "c") |> V.grad(-2.0) |> V.nudge()
-f = V.new(-2.0, "f") |> V.grad(4.0) |> V.nudge()
+a = V.new(2.0, "a")
+b = V.new(-3.0, "b")
+c = V.new(10.0, "c")
+f = V.new(-2.0, "f")
+
+g =
+  G.new(%{
+    a.id => 6.0,
+    b.id => -4.0,
+    c.id => -2.0,
+    f.id => 4.0
+  })
+
+a = V.nudge(a, g)
+b = V.nudge(b, g)
+c = V.nudge(c, g)
+f = V.nudge(f, g)
+
 e = (a * b) |> V.label("e")
 d = (e + c) |> V.label("d")
 l = (d * f) |> V.label("L")
@@ -282,65 +280,95 @@ Vl.new()
 
 ```elixir
 # inputs
-# 5. w1.data * x1w1.grad
-x1 = V.new(2.0, "x1") |> V.grad(-1.5)
-# 5. do/dx2 = do/dx2*w2 * dx2*w2/dx2 = 0.5 * w2 = 0.5
-x2 = V.new(0.0, "x2") |> V.grad(0.5)
+x1 = V.new(2.0, "x1")
+x2 = V.new(0.0, "x2")
 # weights
-# 5. x1.data * x1w1.grad
-w1 = V.new(-3.0, "w1") |> V.grad(1.0)
-# 5. do/dx2 = do/dx2*w2 * dx2*w2/dx2 = 0.5 * x2 = 0.
-w2 = V.new(1.0, "w2") |> V.grad(0.0)
+w1 = V.new(-3.0, "w1")
+w2 = V.new(1.0, "w2")
 # bias
-# 3. do/db after '+', just copy n.grad
-b = V.new(6.8813735870195432, "b") |> V.grad(0.5)
+b = V.new(6.8813735870195432, "b")
 
-# 4. do/x1w1 after '+', just copy x1*w1....grad
-x1w1 = (x1 * w1) |> V.grad(0.5)
-# 4. do/x1w1 after '+', just copy x1*w1....grad
-x2w2 = (x2 * w2) |> V.grad(0.5)
-# 3. do/dx1*... after '+', just copy n.grad
-x1w1x2w2 = (x1w1 + x2w2) |> V.grad(0.5)
-# 4. do/dn = 1-tanh(o)^2 = 1-0.7^2 = 0.5
-n = (x1w1x2w2 + b) |> V.label("n") |> V.grad(0.5)
-# 5. do/do = 1
-o = n |> V.tanh() |> V.label("o") |> V.grad(1.0)
-o |> V.Kino.new()
+x1w1 = x1 * w1
+x2w2 = x2 * w2
+x1w1x2w2 = x1w1 + x2w2
+n = (x1w1x2w2 + b) |> V.label("n")
+o = n |> V.tanh() |> V.label("o")
+
+g =
+  G.new(%{
+    # 1. do/do = 1
+    o.id => 1.0,
+    # 2. do/dn = 1-tanh(o)^2 = 1-0.7^2 = 0.5
+    n.id => 0.5,
+    # 3. do/dx1*... after '+', just copy n.grad
+    x1w1x2w2.id => 0.5,
+    # 3. do/db after '+', just copy n.grad
+    b.id => 0.5,
+    # 4. do/x2w2 after '+', just copy x1*w1....grad
+    x2w2.id => 0.5,
+    # 4. do/x1w1 after '+', just copy x1*w1....grad
+    x1w1.id => 0.5,
+    # 5. w1.data * x1w1.grad
+    x1.id => -1.5,
+    # 5. do/dx2 = do/dx2*w2 * dx2*w2/dx2 = 0.5 * w2 = 0.5
+    x2.id => 0.5,
+    # 5. x1.data * x1w1.grad
+    w1.id => 1.0,
+    # 5. do/dx2 = do/dx2*w2 * dx2*w2/dx2 = 0.5 * x2 = 0
+    w2.id => 0.0
+  })
+
+o |> V.Kino.new(g)
 ```
 
 ```elixir
+defmodule TopologicalOrder do
+  alias Value, as: V
+
+  def sort(%V{} = v), do: sort(v, %{}) |> elem(0)
+
+  defp sort(%{id: id}, visited) when is_map_key(visited, id), do: {[], visited}
+
+  defp sort(v, visited) do
+    visited = Map.put(visited, v.id, true)
+    {prev, visited} = Enum.flat_map_reduce(v.prev, visited, &sort/2)
+    {prev ++ [v], visited}
+  end
+end
+
 defmodule BackpropagationWithBug do
   alias Value, as: V
 
-  def backward(%V{} = v), do: b(%{v | grad: 1.0})
-
-  defp b([_ | _] = values) do
-    # Implicit topological sort via recursion. Sufficient?
-    # TODO: track visited (break cycles)
-    Enum.map(values, &b(&1))
+  def run(%V{} = v) do
+    v
+    |> TopologicalOrder.sort()
+    |> Enum.reverse()
+    |> run(%{v.id => 1.0})
+    |> Gradients.new()
   end
 
-  defp b(%V{op: :+} = v) do
-    [c1, c2] = v.prev
-    c1 = %{c1 | grad: c1.grad + 1.0 * v.grad}
-    c2 = %{c2 | grad: c2.grad + 1.0 * v.grad}
-    %{v | prev: [c1, c2] |> b()}
-  end
+  defp run(nodes, gradients)
+  defp run([], gradients), do: gradients
+  defp run([%V{op: nil} | rest], gradients), do: run(rest, gradients)
 
-  defp b(%V{op: :x} = v) do
-    [c1, c2] = v.prev
-    c1 = %{c1 | grad: c1.grad + c2.data * v.grad}
-    c2 = %{c2 | grad: c2.grad + c1.data * v.grad}
-    %{v | prev: [c1, c2] |> b()}
-  end
+  defp run([%V{} = v | rest], gradients) do
+    c1 = Enum.at(v.prev, 0)
+    c2 = Enum.at(v.prev, 1)
+    grad = gradients[v.id]
 
-  defp b(%V{op: :tanh} = v) do
-    [c] = v.prev
-    c = %{c | grad: c.grad + (1.0 - v.data ** 2) * v.grad}
-    %{v | prev: [c] |> b()}
-  end
+    new_gradients =
+      case v.op do
+        :+ -> %{c1.id => grad, c2.id => grad}
+        :* -> %{c1.id => c2.data * grad, c2.id => c1.data * grad}
+        :tanh -> %{c1.id => (1 - v.data ** 2) * grad}
+        :exp -> %{c1.id => v.data * grad}
+        :pow -> %{c1.id => c2.data * c1.data ** (c2.data - 1) * grad}
+      end
 
-  defp b(%V{op: nil} = v), do: v
+    gradients = Map.merge(gradients, new_gradients)
+
+    run(rest, gradients)
+  end
 end
 
 alias BackpropagationWithBug, as: B
@@ -359,15 +387,17 @@ x2w2 = x2 * w2
 x1w1x2w2 = x1w1 + x2w2
 n = (x1w1x2w2 + b) |> V.label("n")
 o = n |> V.tanh() |> V.label("o")
+g = B.run(o)
 
-o = o |> B.backward() |> V.Kino.new()
+V.Kino.new(o, g)
 ```
 
 ```elixir
 # Bug symptom 1: a should have gradient 2 (a+a = 2*a)
 a = V.new(3.0, "a")
 b = (a + a) |> V.label("b")
-b |> B.backward() |> V.Kino.new() |> Kino.render()
+g = b |> B.run()
+V.Kino.new(b, g) |> Kino.render()
 
 # Bug symptom 2: using variable more than once
 a = V.new(-2.0, "a")
@@ -376,7 +406,8 @@ d = (a * b) |> V.label("d")
 e = (a + b) |> V.label("e")
 f = (d * e) |> V.label("f")
 
-f |> B.backward() |> V.Kino.new() |> Kino.render()
+g = f |> B.run()
+V.Kino.new(f, g) |> Kino.render()
 
 :ok
 ```
@@ -385,56 +416,38 @@ f |> B.backward() |> V.Kino.new() |> Kino.render()
 defmodule Backpropagation do
   alias Value, as: V
 
-  def backward(%V{} = v) do
+  def run(%V{} = v) do
     v
-    |> grads()
-    |> put_grads(v)
-  end
-
-  def grads(%V{} = v) do
-    v
-    |> topo()
+    |> TopologicalOrder.sort()
     |> Enum.reverse()
-    |> b(%{v.id => 1.0})
+    |> run(%{v.id => 1.0})
+    |> Gradients.new()
   end
 
-  defp topo(v), do: topo(v, %{}) |> elem(0)
-  defp topo(%{id: id}, visited) when is_map_key(visited, id), do: {[], visited}
+  defp run(nodes, gradients)
+  defp run([], gradients), do: gradients
+  defp run([%V{op: nil} | rest], gradients), do: run(rest, gradients)
 
-  defp topo(v, visited) do
-    visited = Map.put(visited, v.id, true)
-    {prev, visited} = Enum.flat_map_reduce(v.prev, visited, &topo/2)
-    {prev ++ [v], visited}
-  end
-
-  defp b(nodes, grads)
-  defp b([], grads), do: grads
-  defp b([%V{op: nil} | rest], grads), do: b(rest, grads)
-
-  defp b([%V{} = v | rest], grads) do
+  defp run([%V{} = v | rest], gradients) do
     c1 = Enum.at(v.prev, 0)
     c2 = Enum.at(v.prev, 1)
-    grad = grads[v.id]
+    grad = gradients[v.id]
 
-    new_grads =
+    new_gradients =
       case v.op do
         :+ -> [{c1.id, grad}, {c2.id, grad}]
-        :x -> [{c1.id, c2.data * grad}, {c2.id, c1.data * grad}]
+        :* -> [{c1.id, c2.data * grad}, {c2.id, c1.data * grad}]
         :tanh -> [{c1.id, (1 - v.data ** 2) * grad}]
         :exp -> [{c1.id, v.data * grad}]
         :pow -> [{c1.id, c2.data * c1.data ** (c2.data - 1) * grad}]
       end
 
-    grads =
-      Enum.reduce(new_grads, grads, fn {id, grad}, acc ->
+    gradients =
+      Enum.reduce(new_gradients, gradients, fn {id, grad}, acc ->
         Map.update(acc, id, grad, &(&1 + grad))
       end)
 
-    b(rest, grads)
-  end
-
-  defp put_grads(grads, v) do
-    %{v | grad: grads[v.id] || 0.0, prev: Enum.map(v.prev, &put_grads(grads, &1))}
+    run(rest, gradients)
   end
 end
 
@@ -443,7 +456,8 @@ alias Backpropagation, as: B
 # Bug symptom 1: a should have gradient 2 (a+a = 2*a)
 a = V.new(3.0, "a")
 b = (a + a) |> V.label("b")
-b |> B.backward() |> V.Kino.new() |> Kino.render()
+g = b |> B.run()
+V.Kino.new(b, g) |> Kino.render()
 
 # Bug symptom 2: using variable more than once
 a = V.new(-2.0, "a")
@@ -452,11 +466,14 @@ d = (a * b) |> V.label("d")
 e = (a + b) |> V.label("e")
 f = (d * e) |> V.label("f")
 
-f |> B.backward() |> V.Kino.new() |> Kino.render()
+g = f |> B.run()
+V.Kino.new(f, g) |> Kino.render()
 
 a = V.new(2.0, "a")
 b = V.new(4.0, "b")
-(a / b) |> B.backward() |> V.Kino.new() |> Kino.render()
+c = a / b
+g = c |> B.run()
+V.Kino.new(c, g) |> Kino.render()
 
 :ok
 ```
@@ -478,7 +495,8 @@ n = (x1w1x2w2 + b) |> V.label("n")
 e = V.exp(2.0 * n)
 o = ((e - 1.0) / (e + 1.0)) |> V.label("o")
 
-o |> B.backward() |> V.Kino.new()
+g = o |> B.run()
+V.Kino.new(o, g)
 ```
 
 ```elixir
@@ -524,19 +542,16 @@ defmodule Neuron do
 
   def call(%Neuron{} = n, x) do
     Enum.zip(n.w, x)
-    |> Enum.map(fn {w, x} -> (x * w) |> V.label("*") end)
+    |> Enum.map(fn {w, x} -> x * w end)
     |> V.sum()
     |> V.+(n.b)
   end
 
-  def parameters(%Neuron{} = n), do: n.w ++ [n.b]
-
-  def get_grad(%Neuron{} = n, [:w, wi], grads) do
-    grads[Enum.at(n.w, wi).id]
-  end
-
-  def get_grad(%Neuron{} = n, [:b], grads) do
-    grads[n.b.id]
+  def minimize_loss(%Neuron{} = n, %Gradients{} = g, factor) do
+    %Neuron{
+      w: Enum.map(n.w, &V.nudge(&1, g, factor)),
+      b: V.nudge(n.b, g, factor)
+    }
   end
 
   defp rand(from, to), do: :rand.uniform_real() * (to - from) + from
@@ -555,12 +570,8 @@ defmodule Layer do
     for n <- l.n, do: Neuron.call(n, x)
   end
 
-  def parameters(%Layer{} = l) do
-    Enum.flat_map(l.n, &Neuron.parameters/1)
-  end
-
-  def get_grad(%Layer{} = l, [ni | path], grads) do
-    Neuron.get_grad(Enum.at(l.n, ni), path, grads)
+  def minimize_loss(%Layer{} = l, %Gradients{} = g, factor) do
+    %Layer{n: Enum.map(l.n, &Neuron.minimize_loss(&1, g, factor))}
   end
 end
 
@@ -581,25 +592,18 @@ defmodule MLP do
     |> unwrap()
   end
 
-  def parameters(%MLP{} = m) do
-    Enum.flat_map(m.l, &Layer.parameters/1)
-  end
-
-  def get_grad(%MLP{} = m, [li | path], grads) do
-    Layer.get_grad(Enum.at(m.l, li), path, grads)
+  def minimize_loss(%MLP{} = m, %Gradients{} = g, factor \\ -0.01) do
+    %MLP{l: Enum.map(m.l, &Layer.minimize_loss(&1, g, factor))}
   end
 
   defp unwrap([v]), do: v
   defp unwrap(vs), do: vs
 end
 
-(n = MLP.new(3, [4, 4, 1]))
-|> MLP.call([2.0, 3.0, -1.0])
-|> B.backward()
-|> V.Kino.new()
-|> Kino.render()
-
-:ok
+n = MLP.new(3, [4, 4, 1])
+o = n |> MLP.call([2.0, 3.0, -1.0])
+g = B.run(o)
+V.Kino.new(o, g)
 ```
 
 ```elixir
@@ -611,12 +615,98 @@ xs = [
 ]
 
 ys = [1.0, -1.0, -1.0, 1.0]
-ypred = for x <- xs, do: MLP.call(n, x)
-loss = for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0) |> V.sum()
-loss = loss |> B.backward() |> IO.inspect(label: :loss)
-# Graph too large to render
-MLP.get_grad(n, [0, 0, :w, 0], loss |> B.grads()) |> IO.inspect(label: :w0_grad)
-MLP.parameters(n) |> length()
+ypred = for(x <- xs, do: MLP.call(n, x))
 
-# :ok
+loss =
+  for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0)
+  |> V.sum()
+  |> IO.inspect(label: :loss)
+
+g = loss |> B.run()
+# V.Kino.new(loss, g) |> Kino.render()
+# Graph too large to render
+n = MLP.minimize_loss(n, g, -0.01)
+
+ypred = for(x <- xs, do: MLP.call(n, x))
+
+loss =
+  for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0)
+  |> V.sum()
+  |> IO.inspect(label: :loss)
+
+g = loss |> B.run()
+n = MLP.minimize_loss(n, g, -0.01)
+
+ypred = for(x <- xs, do: MLP.call(n, x))
+
+loss =
+  for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0)
+  |> V.sum()
+  |> IO.inspect(label: :loss)
+
+g = loss |> B.run()
+n = MLP.minimize_loss(n, g, -0.01)
+
+ypred = for(x <- xs, do: MLP.call(n, x))
+
+loss =
+  for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0)
+  |> V.sum()
+  |> IO.inspect(label: :loss)
+
+g = loss |> B.run()
+n = MLP.minimize_loss(n, g, -0.01)
+
+ypred = for(x <- xs, do: MLP.call(n, x))
+
+loss =
+  for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0)
+  |> V.sum()
+  |> IO.inspect(label: :loss)
+
+g = loss |> B.run()
+n = MLP.minimize_loss(n, g, -0.01)
+
+ypred = for(x <- xs, do: MLP.call(n, x))
+
+loss =
+  for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0)
+  |> V.sum()
+  |> IO.inspect(label: :loss)
+
+# g = loss |> B.run()
+# n = MLP.minimize_loss(n, g, -0.01)
+
+:ok
+```
+
+```elixir
+defmodule GradientDescent do
+  def run(%MLP{} = net, xs, ys, count \\ 100, factor \\ -0.01) do
+    Enum.reduce(1..count, net, fn _, net ->
+      # forward pass
+      ypred = for(x <- xs, do: MLP.call(net, x))
+      loss = for({ygt, yout} <- Enum.zip(ys, ypred), do: (yout - ygt) ** 2.0) |> V.sum()
+
+      # backward pass
+      # Don't have to flush the grad, because we're functional :)
+      gradients = loss |> B.run()
+
+      # update
+      MLP.minimize_loss(net, gradients, factor)
+    end)
+  end
+end
+
+xs = [
+  [2.0, 3.0, -1.0],
+  [3.0, -1.0, 0.5],
+  [0.5, 1.0, 1.0],
+  [1.0, 1.0, -1.0]
+]
+
+ys = [1.0, -1.0, -1.0, 1.0]
+n = MLP.new(3, [4, 4, 1])
+n = GradientDescent.run(n, xs, ys, 100, -0.01)
+for x <- xs, do: MLP.call(n, x)
 ```
