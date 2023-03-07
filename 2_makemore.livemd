@@ -1,0 +1,381 @@
+# Makemore #1 (Karpathy Neural Networks Series #2)
+
+```elixir
+Mix.install(
+  [
+    {:nx, "~> 0.5.1"},
+    {:exla, "~> 0.5.1"}
+  ],
+  system_env: [
+    # {"XLA_TARGET", "cuda118"},
+  ],
+  config: [
+    nx: [default_backend: EXLA.Backend]
+  ]
+)
+```
+
+## Section
+
+```elixir
+# https://www.youtube.com/watch?v=PaCmpygFfXo&list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ&index=2
+
+words =
+  Path.join(__DIR__, 'names.txt')
+  |> File.read!()
+  |> String.split("\n")
+
+Enum.slice(words, 1..10)
+```
+
+```elixir
+length(words)
+```
+
+```elixir
+Enum.min_max_by(words, &String.length/1)
+```
+
+```elixir
+bigram_counts =
+  words
+  |> Enum.map(&String.graphemes(".#{&1}."))
+  |> Enum.flat_map(&Enum.zip(&1, Enum.slice(&1, 1..-1)))
+  |> Enum.frequencies()
+
+bigram_counts
+|> Enum.sort_by(&(-elem(&1, 1)))
+|> Enum.slice(0..10)
+```
+
+```elixir
+chars = words |> Enum.join("") |> String.graphemes() |> MapSet.new() |> Enum.sort()
+chars = ["." | chars]
+stoi = chars |> Enum.with_index() |> Map.new()
+itos = Map.new(stoi, fn {c, i} -> {i, c} end)
+:ok
+```
+
+```elixir
+n_data = for from <- chars, do: for(to <- chars, do: bigram_counts[{from, to}] || 0)
+n = Nx.tensor(n_data, names: [:from, :to])
+```
+
+```elixir
+n |> Nx.to_heatmap(ansi_enabled: true)
+```
+
+```elixir
+key = Nx.Random.key(424_242)
+p = n[from: 0] |> Nx.divide(Nx.sum(n[from: 0]))
+{samples, _key} = Nx.Random.choice(key, Nx.iota({27}), p, samples: 1, replace: true)
+```
+
+```elixir
+sums = Nx.sum(n, axes: [:to], keep_axes: true)
+probs = n |> Nx.divide(sums)
+probs[from: 0] |> Nx.sum()
+```
+
+```elixir
+defmodule Sample do
+  import Nx.Defn
+
+  def word(n, itos, key \\ :rand.uniform(9_999_999)) do
+    wordn(n, key)
+    |> Nx.to_list()
+    |> Enum.take_while(&(&1 != -1))
+    |> Enum.reverse()
+    |> Enum.map(&itos[&1])
+    |> Enum.join()
+    |> String.trim(".")
+  end
+
+  # Nx kernel, 
+  defn wordn(n, key) do
+    probs = n / Nx.sum(n, axes: [:to], keep_axes: true)
+    dot = 0 |> Nx.reshape({1})
+    key = Nx.Random.key(key)
+    acc = Nx.concatenate({dot, Nx.broadcast(-1, {99})})
+
+    {acc, _, _, _, _} =
+      while {acc, n, i = 0, key, probs}, (i == 0 or acc[0] != 0) and i < 100 do
+        last = acc[0]
+        p = probs[last]
+        indices = Nx.iota({27})
+        {next, key} = Nx.Random.choice(key, indices, p)
+        acc = Nx.concatenate({next, acc[0..98]})
+
+        {acc, n, i + 1, key, probs}
+      end
+
+    acc
+  end
+end
+
+for _ <- 1..100, do: Sample.word(n, itos)
+```
+
+```elixir
+n_plus_1 = n |> Nx.add(1)
+sums = Nx.sum(n_plus_1, axes: [:to], keep_axes: true)
+probs_smoothed = n_plus_1 |> Nx.divide(sums)
+
+# ["andrejq"]
+probs_list =
+  words
+  |> Enum.slice(0..2)
+  |> Enum.map(&String.graphemes(".#{&1}."))
+  |> Enum.flat_map(&Enum.zip(&1, Enum.slice(&1, 1..-1)))
+  |> Enum.map(fn {from, to} ->
+    {from <> to,
+     probs_smoothed[from: stoi[from], to: stoi[to]] |> Nx.reshape({}) |> Nx.to_number()}
+  end)
+  |> Enum.map(fn {bigram, prob} -> {bigram, prob, Nx.log(prob) |> Nx.to_number()} end)
+```
+
+```elixir
+# likelihood: product(probabilities)
+# log likelihood: sum(log(probabilities))
+
+log_likelihood =
+  probs_list |> Enum.map(&elem(&1, 2)) |> Enum.sum() |> IO.inspect(label: :log_likelihood)
+
+# loss function: lower is better
+nll = -log_likelihood |> IO.inspect(label: :negative_log_likelihood)
+average_nll = (nll / length(probs_list)) |> IO.inspect(label: :average)
+
+:ok
+```
+
+```elixir
+defmodule OneHot do
+  import Nx.Defn
+
+  defn enc(input, opts \\ []) do
+    opts = keyword!(opts, count: 1)
+
+    input
+    |> Nx.new_axis(-1)
+    |> Nx.equal(Nx.iota({opts[:count]}, names: [:one_hot], type: :u8))
+  end
+end
+
+# create training set of bigrams {x, y}
+xs =
+  words
+  |> Enum.slice(0..0)
+  |> Stream.flat_map(&(".#{&1}" |> String.graphemes()))
+  |> Stream.map(&stoi[&1])
+  |> Enum.to_list()
+  |> Nx.tensor(names: [:i], type: :u8)
+
+xenc = OneHot.enc(xs, count: 27)
+
+ys =
+  words
+  |> Enum.slice(0..0)
+  |> Stream.flat_map(&("#{&1}." |> String.graphemes()))
+  |> Stream.map(&stoi[&1])
+  |> Enum.to_list()
+  |> Nx.tensor(names: [:i], type: :u8)
+
+yenc = OneHot.enc(ys, count: 27)
+
+Nx.tensor([xenc |> Nx.to_list(), yenc |> Nx.to_list()], type: :u8) |> Nx.to_heatmap()
+```
+
+```elixir
+key = Nx.Random.key(9)
+{w, _key} = Nx.Random.normal(key, shape: {27, 27}, names: [:i, :one_hot])
+logits = xenc |> Nx.dot(w) |> Nx.rename([:i, :logits])
+# logits = log(counts)
+logits[3][13]
+
+(xenc |> Nx.dot(w))[3][13] |> IO.inspect()
+xenc[3] |> Nx.multiply(w[13]) |> Nx.sum() |> IO.inspect()
+
+logits
+```
+
+```elixir
+defmodule SoftMax do
+  import Nx.Defn
+
+  defn activate(logits) do
+    # equivalent to n matrix
+    counts =
+      logits
+      |> Nx.exp()
+      |> Nx.rename([:i, :counts])
+
+    counts
+    |> Nx.divide(Nx.sum(counts, axes: [:counts], keep_axes: true))
+    |> Nx.rename([:i, :probs])
+  end
+end
+
+probs = SoftMax.activate(logits)
+probs[i: 0] |> Nx.sum()
+```
+
+```elixir
+# average negative log likelhood
+loss =
+  probs
+  |> Nx.gather(Nx.tensor(for(i <- 0..4, do: [i, ys[i] |> Nx.to_number()])))
+  |> Nx.log()
+  |> Nx.negate()
+  |> Nx.mean()
+```
+
+```elixir
+defmodule BigramNet do
+  import Nx.Defn
+
+  defn loss(w, xs, ys) do
+    print_expr(w)
+    probs = forward_pass(w, xs)
+    probs_indices = Nx.stack({Nx.iota({Nx.size(ys)}, type: :u8), ys}, axis: -1)
+
+    probs
+    |> Nx.gather(probs_indices)
+    |> Nx.log()
+    |> Nx.mean()
+    |> Nx.negate()
+    |> regularize(w)
+  end
+
+  # push w's towards 0
+  defn regularize(loss, w) do
+    loss + 0.01 * Nx.mean(w ** 2)
+  end
+
+  defn forward_pass(w, xs) do
+    xenc = xs |> OneHot.enc(count: 27)
+    logits = xenc |> Nx.rename([nil, nil]) |> Nx.dot(w)
+    counts = logits |> Nx.exp()
+    probs = counts |> Nx.divide(Nx.sum(counts, axes: [:one_hot], keep_axes: true))
+  end
+
+  defn backward_pass(w, xs, ys) do
+    grad(w, fn w -> loss(w, xs, ys) end)
+  end
+end
+
+key = Nx.Random.key(42)
+{w, _key} = Nx.Random.normal(key, shape: {27, 27}, names: [:i, :one_hot])
+# w = Nx.broadcast(0, {27, 27}, names: [:i, :one_hot])
+word_count = 10_000
+
+xs =
+  words
+  |> Enum.slice(0..(word_count - 1))
+  |> Stream.flat_map(&(".#{&1}" |> String.graphemes()))
+  |> Stream.map(&stoi[&1])
+  |> Enum.to_list()
+  |> Nx.tensor(names: [:i], type: :u8)
+
+ys =
+  words
+  |> Enum.slice(0..(word_count - 1))
+  |> Stream.flat_map(&("#{&1}." |> String.graphemes()))
+  |> Stream.map(&stoi[&1])
+  |> Enum.to_list()
+  |> Nx.tensor(names: [:i], type: :u8)
+
+BigramNet.loss(w, xs, ys) |> Nx.to_number() |> IO.inspect(label: :loss)
+
+# gradient descent
+# TODO Loss much higher than 2.45 after 100 iterations (especially with higher word_count)
+w =
+  for _ <- 1..2, reduce: w do
+    w ->
+      IO.inspect(w)
+      g = BigramNet.backward_pass(w, xs, ys)
+      _w = w |> Nx.subtract(Nx.multiply(50, g))
+  end
+
+BigramNet.loss(w, xs, ys) |> Nx.to_number() |> IO.inspect(label: :loss)
+
+:ok
+```
+
+```elixir
+w_counts = w |> Nx.exp()
+# TODO w != b. Something's wrong
+w_probs =
+  w_counts |> Nx.divide(w_counts |> Nx.sum(axes: [:one_hot], keep_axes: true)) |> IO.inspect()
+
+probs_smoothed |> IO.inspect()
+:ok
+```
+
+```elixir
+defmodule SampleNet do
+  def take(w, itos, seed \\ :rand.uniform(9_999_999)) do
+    word(w, Nx.Random.key(seed))
+    |> Enum.map(&itos[&1])
+    |> Enum.join()
+    |> String.trim(".")
+  end
+
+  def word(w, key, acc \\ [0])
+  def word(_, _, acc) when length(acc) > 100, do: Enum.reverse(acc)
+  def word(_, _, [0 | _] = acc) when length(acc) > 1, do: Enum.reverse(acc)
+
+  def word(w, key, [last | _] = acc) do
+    xenc = OneHot.enc(last, count: 27)
+    logits = xenc |> Nx.dot(w)
+    counts = Nx.exp(logits)
+    p = counts |> Nx.divide(Nx.sum(counts, axes: [0], keep_axes: true))
+    {c, key} = Nx.Random.choice(key, Nx.iota({27}), p, samples: 1)
+    c = c |> Nx.reshape({}) |> Nx.to_number()
+
+    word(w, key, [c | acc])
+  end
+end
+
+for _ <- 1..10, do: SampleNet.take(w, itos)
+```
+
+```elixir
+defmodule SampleBigramN do
+  import Nx.Defn
+
+  def word(w, itos, key \\ :rand.uniform(9_999_999)) do
+    wordn(w, key)
+    |> Nx.to_list()
+    |> Enum.take_while(&(&1 != -1))
+    |> Enum.reverse()
+    |> Enum.map(&itos[&1])
+    |> Enum.join()
+    |> String.trim(".")
+  end
+
+  defn wordn(w, key) do
+    counts = Nx.exp(w)
+    probs = counts / Nx.sum(counts, axes: [1], keep_axes: true)
+    dot = 0 |> Nx.reshape({1})
+    key = Nx.Random.key(key)
+    acc = Nx.concatenate({dot, Nx.broadcast(-1, {99})})
+
+    {acc, _, _, _, _} =
+      while {acc, w, i = 0, key, probs}, (i == 0 or acc[0] != 0) and i < 100 do
+        last = acc[0]
+        last_enc = OneHot.enc(last, count: 27)
+        p = probs |> Nx.dot(last_enc)
+        indices = Nx.iota({27})
+        {next, key} = Nx.Random.choice(key, indices, p)
+        acc = Nx.concatenate({next, acc[0..98]})
+
+        {acc, w, i + 1, key, probs}
+      end
+
+    acc
+  end
+end
+
+# TODO Probabilities 
+for _ <- 1..10, do: SampleBigramN.word(w, itos)
+```
