@@ -7,7 +7,7 @@ Translated from python/jupyter to more or less idiomatatic elixir/livebook.
 Number | Title | Status
 -------|-------|-------
 1 | micrograd  | ✅ finished 
-2 | makemore 1 | ✅ finished, ⚠️ performance issue, ⚠️ loss value higher than expected 
+2 | makemore 1 | ✅ finished, ⚠️ performance issue, ⚠️ loss value higher than expected, ℹ️ good results using Axon
 3 | makemore 2 | ❌ not started
 4 | makemore 3 | ❌ not started
 5 | makemore 4 | ❌ not started
